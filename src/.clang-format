@@ -1,0 +1,5 @@
+UseTab: Always
+IndentWidth: 8
+TabWidth: 8
+BreakBeforeBraces: Allman
+Columnlimit: 80
