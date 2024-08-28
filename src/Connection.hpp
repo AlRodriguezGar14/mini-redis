@@ -29,4 +29,6 @@ public:
     send(m_client.fd(), "\r\n", 2, 0);
     send(m_client.fd(), message.c_str(), message.length(), 0);
   }
+
+  void ping() { send(m_client.fd(), "+PONG\r\n", 7, 0); }
 };

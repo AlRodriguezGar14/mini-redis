@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
     return 1;
   }
   Connection connection(client, server);
-  connection.response("Hello from server\r\n", "HTTP/1.1 200 OK\r\n");
+  connection.ping();
 
   server.close_server();
 
