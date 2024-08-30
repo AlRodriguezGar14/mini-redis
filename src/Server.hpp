@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstring>
+#include <errno.h>
+#include <fcntl.h>
 #include <iostream>
 #include <netinet/in.h>
 #include <sys/select.h>
@@ -16,6 +18,7 @@ private:
   std::unordered_set<int> m_clients;
 
   bool handle_client(int client_fd);
+  void set_nonblocking(int sock);
 
 public:
   Server(int port);
