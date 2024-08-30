@@ -6,6 +6,10 @@
 // #include <unistd.h>
 #include "Client.hpp"
 #include "Server.hpp"
+#include <cstring>
+#include <strings.h>
+
+#define BUFF_SIZE 4096
 
 class Connection {
 private:
@@ -28,6 +32,20 @@ public:
 
     send(m_client.fd(), "\r\n", 2, 0);
     send(m_client.fd(), message.c_str(), message.length(), 0);
+  }
+
+  void listen() {
+    char buffer[BUFF_SIZE] = "";
+    memset(buffer, '\0', BUFF_SIZE);
+    int bytes_received;
+
+    while ((bytes_received = recv(m_client.fd(), &buffer, 4096, 0)) > 0) {
+      std::cout << buffer << std::endl;
+      if (std::string(buffer) == "*1\r\n$4\r\nPING\r\n") {
+        ping();
+      }
+      bzero(buffer, bytes_received);
+    }
   }
 
   void ping() { send(m_client.fd(), "+PONG\r\n", 7, 0); }
