@@ -12,6 +12,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "Parser.hpp"
+
 // Redis request parser
 struct Request {
   std::string command;

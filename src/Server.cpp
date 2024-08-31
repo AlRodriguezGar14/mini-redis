@@ -1,4 +1,5 @@
 #include "Server.hpp"
+#include "HandleResponse.hpp"
 #include <algorithm>
 #include <asm-generic/errno.h>
 #include <cstring>
@@ -107,8 +108,6 @@ void Server::listen_connections() {
 bool Server::handle_client(int client_fd) {
   Request req;
   char buffer[1024] = {0};
-  const char *ping_response = "+PONG\r\n";
-  std::string echo_response;
 
   ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
   if (bytes_read <= 0) {
@@ -119,28 +118,16 @@ bool Server::handle_client(int client_fd) {
     buffer[bytes_read] = '\0'; // Null-terminate the received data
     //
     std::cout << "\nRequest:\n" << buffer;
-    if (parse_request(req, std::string(buffer)) == -1)
-      return false;
 
-    if (!req.command.empty() && req.command == "PING") {
-      send(client_fd, ping_response, strlen(ping_response), 0);
-      return true;
-    }
-    if (!req.command.empty() && req.command == "ECHO") {
-      if (req.args.size() > 1) {
-        echo_response += "*";
-        echo_response += std::to_string(req.args.size());
-        echo_response += "\r\n";
-      }
-      for (auto &arg : req.args) {
-        echo_response += "$";
-        echo_response += std::to_string(arg.length());
-        echo_response += "\r\n";
-        echo_response += arg;
-        echo_response += "\r\n";
-      }
-      // std::cout << "Response for ECHO: " << echo_response << std::endl;
-      send(client_fd, echo_response.c_str(), echo_response.length(), 0);
+    RespParser parser;
+
+    try {
+      RespData result = parser.parse(std::string(buffer));
+      parser.printRespData(result);
+      HandleResponse respond(result, client_fd);
+
+    } catch (const std::exception &e) {
+      std::cerr << "Error: " << e.what() << std::endl;
     }
   }
   return true;
