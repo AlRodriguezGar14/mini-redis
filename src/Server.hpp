@@ -25,7 +25,7 @@ private:
   int m_server_fd;
   int m_connection_backlog;
   int m_port;
-  // std::unordered_set<int> m_clients;
+  std::map<std::string, std::string> m_database;
 
   bool handle_client(int client_fd);
   void set_nonblocking(int sock);
