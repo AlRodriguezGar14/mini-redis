@@ -1,4 +1,5 @@
 #include "Server.hpp"
+#include <algorithm>
 #include <asm-generic/errno.h>
 #include <cstring>
 #include <fcntl.h>
@@ -104,8 +105,11 @@ void Server::listen_connections() {
 }
 
 bool Server::handle_client(int client_fd) {
+  Request req;
   char buffer[1024] = {0};
-  const char *response = "+PONG\r\n";
+  const char *ping_response = "+PONG\r\n";
+  std::string echo_response;
+
   ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
   if (bytes_read <= 0) {
     if (bytes_read == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
@@ -113,10 +117,73 @@ bool Server::handle_client(int client_fd) {
     }
   } else {
     buffer[bytes_read] = '\0'; // Null-terminate the received data
-    if (std::string(buffer) == "*1\r\n$4\r\nPING\r\n") {
-      std::cout << "request:\n" << buffer << std::endl;
-      send(client_fd, response, strlen(response), 0);
+    //
+    std::cout << "\nRequest:\n" << buffer;
+    if (parse_request(req, std::string(buffer)) == -1)
+      return false;
+
+    if (!req.command.empty() && req.command == "PING") {
+      send(client_fd, ping_response, strlen(ping_response), 0);
+      return true;
+    }
+    if (!req.command.empty() && req.command == "ECHO") {
+      if (req.args.size() > 1) {
+        echo_response += "*";
+        echo_response += std::to_string(req.args.size());
+        echo_response += "\r\n";
+      }
+      for (auto &arg : req.args) {
+        echo_response += "$";
+        echo_response += std::to_string(arg.length());
+        echo_response += "\r\n";
+        echo_response += arg;
+        echo_response += "\r\n";
+      }
+      // std::cout << "Response for ECHO: " << echo_response << std::endl;
+      send(client_fd, echo_response.c_str(), echo_response.length(), 0);
     }
   }
   return true;
+}
+
+void print_request(const Request &req) {
+  std::cout << "Parsed request:\n";
+  std::cout << "\tCommand: " << req.command << std::endl;
+  std::cout << "\tArguments: ";
+  for (const auto &arg : req.args)
+    std::cout << " " << arg;
+  std::cout << std::endl;
+}
+int Server::parse_request(Request &req, const std::string &buffer) {
+
+  std::string remaining_buffer = buffer;
+
+  if (remaining_buffer[0] != '*') {
+    std::cerr << "Invalid request\n";
+    return -1;
+  }
+
+  size_t pos = remaining_buffer.find("\r\n");
+  int numb_args = std::stoi(remaining_buffer.substr(1, pos - 1));
+  remaining_buffer = remaining_buffer.substr(pos + 2);
+
+  for (int i = 0; i < numb_args; ++i) {
+    if (remaining_buffer[0] != '$') {
+      std::cerr << "Invalid request\n";
+      return -1;
+    }
+    pos = remaining_buffer.find("\r\n");
+    int arg_size = std::stoi(remaining_buffer.substr(1, pos - 1));
+    remaining_buffer = remaining_buffer.substr(pos + 2);
+
+    std::string arg = remaining_buffer.substr(0, arg_size);
+    remaining_buffer = remaining_buffer.substr(arg_size + 2);
+    if (i == 0) {
+      std::transform(arg.begin(), arg.end(), arg.begin(), ::toupper);
+      req.command = arg;
+    } else
+      req.args.push_back(arg);
+  }
+  print_request(req);
+  return 0;
 }
