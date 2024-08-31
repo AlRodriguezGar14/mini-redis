@@ -28,12 +28,9 @@ private:
   void empty();
   void array(RespData result, std::map<std::string, std::string> &db);
   void ping();
-  void echo(std::vector<RespData>::const_iterator command,
-            const std::vector<RespData> &command_array);
-  void set(std::vector<RespData>::const_iterator command,
-           const std::vector<RespData> &command_array,
+  void echo(size_t &i, const std::vector<RespData> &command_array);
+  void set(size_t &i, const std::vector<RespData> &command_array,
            std::map<std::string, std::string> &db);
-  void get(std::vector<RespData>::const_iterator command,
-           const std::vector<RespData> &command_array,
+  void get(size_t &i, const std::vector<RespData> &command_array,
            std::map<std::string, std::string> &db);
 };

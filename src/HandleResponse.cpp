@@ -13,42 +13,42 @@ void HandleResponse::array(RespData result,
                            std::map<std::string, std::string> &db) {
   // Extract array
   const auto &command_array = std::get<std::vector<RespData>>(result.value);
-  for (auto command = command_array.begin(); command != command_array.end();
-       ++command) {
+  for (size_t i = 0; i <= command_array.size(); ++i) {
+    const auto &command = command_array[i];
     // Extract each command based on type std::get()
-    if (command->type == RespType::BulkString) {
-      std::string command_str = std::get<std::string>(command->value);
+    if (command.type == RespType::BulkString) {
+      std::string command_str = std::get<std::string>(command.value);
       std::transform(command_str.begin(), command_str.end(),
                      command_str.begin(), ::toupper);
 
       if (command_str == "PING") {
         ping();
+        ++i;
       }
       if (command_str == "ECHO") {
-        echo(command, command_array);
+        echo(++i, command_array);
       }
       if (command_str == "SET") {
-        set(std::next(command), command_array, db);
+        set(++i, command_array, db);
       }
       if (command_str == "GET") {
-        get(std::next(command), command_array, db);
-      } else {
-        continue;
-        // empty();
+        get(++i, command_array, db);
       }
+    } else {
+      ++i;
     }
   }
 }
 void HandleResponse::ping() {
   send(m_client_fd, ping_response, strlen(ping_response), 0);
 }
-void HandleResponse::echo(std::vector<RespData>::const_iterator command,
+void HandleResponse::echo(size_t &i,
                           const std::vector<RespData> &command_array) {
 
-  if (std::next(command) != command_array.end() &&
-      std::next(command)->type == RespType::BulkString) {
+  if (i < command_array.size() &&
+      command_array[i].type == RespType::BulkString) {
 
-    std::string echo_data = std::get<std::string>(std::next(command)->value);
+    std::string echo_data = std::get<std::string>(command_array[i++].value);
     echo_response += "$";
     echo_response += std::to_string(echo_data.length());
     echo_response += "\r\n";
@@ -75,34 +75,34 @@ void HandleResponse::null() {
   send(m_client_fd, null_bulk_string, strlen(null_bulk_string), 0);
 }
 
-void HandleResponse::set(std::vector<RespData>::const_iterator command,
-                         const std::vector<RespData> &command_array,
+void HandleResponse::set(size_t &i, const std::vector<RespData> &command_array,
                          std::map<std::string, std::string> &db) {
-  if (command == command_array.end() || command->type != RespType::BulkString) {
+  if (i >= command_array.size() ||
+      command_array[i].type != RespType::BulkString) {
     null();
     return;
   }
 
-  std::string key = std::get<std::string>(command->value);
-  if (std::next(command) == command_array.end() ||
-      std::next(command)->type != RespType::BulkString) {
+  std::string key = std::get<std::string>(command_array[i++].value);
+  if (i > command_array.size() ||
+      command_array[i].type != RespType::BulkString) {
     null();
     return;
   }
-  std::string value = std::get<std::string>(std::next(command)->value);
+  std::string value = std::get<std::string>(command_array[i++].value);
   db.insert_or_assign(key, value);
   std::cout << "Set map[" << key << "] = " << value << std::endl;
   ok();
 }
 
-void HandleResponse::get(std::vector<RespData>::const_iterator command,
-                         const std::vector<RespData> &command_array,
+void HandleResponse::get(size_t &i, const std::vector<RespData> &command_array,
                          std::map<std::string, std::string> &db) {
-  if (command == command_array.end() || command->type != RespType::BulkString) {
+  if (i > command_array.size() ||
+      command_array[i].type != RespType::BulkString) {
     null();
     return;
   }
-  std::string key = std::get<std::string>(command->value);
+  std::string key = std::get<std::string>(command_array[i++].value);
   try {
     db.at(key);
     std::string value = db[key];
