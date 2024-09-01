@@ -35,6 +35,8 @@ private:
            DB_Config &config);
   void get(size_t &i, const std::vector<RespData> &command_array,
            DB_Config &config);
+  void config_req(size_t &i, const std::vector<RespData> &command_array,
+                  const DB_Config &config);
 
   int check_expire_ms(std::string key, DB_Config &config);
 };

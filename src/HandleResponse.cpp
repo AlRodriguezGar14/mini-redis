@@ -21,6 +21,11 @@ int HandleResponse::check_expire_ms(std::string key, DB_Config &config) {
     return 0;
 
   config.db.erase(key);
+  try {
+    config.in_memory_db.at(key);
+    config.in_memory_db.erase(key);
+  } catch (std::exception &e) {
+  }
   null();
   return 1;
 }
@@ -30,6 +35,37 @@ HandleResponse::HandleResponse(RespData result, int client_fd,
     : m_client_fd(client_fd) {
   if (result.type == RespType::Array) {
     array(result, config);
+  }
+}
+
+void HandleResponse::config_req(size_t &i,
+                                const std::vector<RespData> &command_array,
+                                const DB_Config &config) {
+  if (i >= command_array.size() ||
+      command_array[i].type != RespType::BulkString)
+    return;
+
+  // The only request handling is CONFIG GET
+  std::string cmd = std::get<std::string>(command_array[i++].value);
+  std::string what = std::get<std::string>(command_array[i++].value);
+  if (cmd != "GET")
+    return;
+
+  if (what == "dir") {
+    std::string response = "*2\r\n$3\r\ndir\r\n$";
+    response += std::to_string(config.dir.length());
+    response += "\r\n";
+    response += config.dir;
+    response += "\r\n";
+    send(m_client_fd, response.c_str(), response.length(), 0);
+  }
+  if (what == "dbfilename") {
+    std::string response = "*2\r\n$10\r\ndbfilename\r\n$";
+    response += std::to_string(config.db_filename.length());
+    response += "\r\n";
+    response += config.db_filename;
+    response += "\r\n";
+    send(m_client_fd, response.c_str(), response.length(), 0);
   }
 }
 
@@ -52,12 +88,13 @@ void HandleResponse::array(RespData result, DB_Config &config) {
         echo(++i, command_array);
       }
       if (command_str == "SET") {
-        std::cout << "DB Size before set: " << config.db.size() << std::endl;
         set(++i, command_array, config);
-        std::cout << "DB Size after set: " << config.db.size() << std::endl;
       }
       if (command_str == "GET") {
         get(++i, command_array, config);
+      }
+      if (command_str == "CONFIG") {
+        config_req(++i, command_array, config);
       }
     } else {
       ++i;
@@ -119,9 +156,11 @@ void HandleResponse::set(size_t &i, const std::vector<RespData> &command_array,
                      .count();
   DB_Entry entry{value, now, 0};
   config.db.insert_or_assign(key, entry);
-  ok();
-  if (i >= max_size)
+  config.in_memory_db.insert_or_assign(key, entry);
+  if (i >= max_size) {
+    ok();
     return;
+  }
   std::string next_cmd = std::get<std::string>(command_array[i].value);
   if (next_cmd != "px") {
     return;
@@ -132,9 +171,10 @@ void HandleResponse::set(size_t &i, const std::vector<RespData> &command_array,
                     NULL, 10);
   if (entry.expiry == 0)
     return;
-  std::cout << "Assigned to db_expiry[" << key << "] : " << entry.expiry
-            << "/ms" << std::endl;
+  // std::cout << "Assigned to db_expiry[" << key << "] : " << entry.expiry
+  //           << "/ms" << std::endl;
   config.db.insert_or_assign(key, entry);
+  config.in_memory_db.insert_or_assign(key, entry);
   ok();
 }
 

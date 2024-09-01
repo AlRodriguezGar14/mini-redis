@@ -28,7 +28,6 @@ void Server::how_to_use() {
 }
 
 int Server::set_persistence(int argc, char **argv) {
-  std::cout << "argc : " << argc << " argv: " << argv << std::endl;
   if (argc != 5 && argc != 1)
     return how_to_use(), -1;
 
@@ -36,8 +35,8 @@ int Server::set_persistence(int argc, char **argv) {
     std::cout << "Setting default values\n";
     config.dir = ".";
     config.db_filename = "default.rdb";
-    if (read_persistence() == -1)
-      return -1;
+    // if (read_persistence() == -1)
+    //   return -1;
     return 0;
   }
 
@@ -54,8 +53,8 @@ int Server::set_persistence(int argc, char **argv) {
   if (config.db_filename.substr(config.db_filename.length() - 4) != ".rdb")
     return how_to_use(), -1;
 
-  if (read_persistence() == -1)
-    return -1;
+  // if (read_persistence() == -1)
+  //   return -1;
   return 0;
 }
 
@@ -70,9 +69,9 @@ std::string Server::parse_value(const std::string &needle,
 
 int Server::read_persistence() {
 
-  std::string file = config.dir + "/" + config.db_filename;
+  config.file = config.dir + "/" + config.db_filename;
 
-  std::ifstream rdb(file);
+  std::ifstream rdb(config.file);
   if (!rdb.is_open()) {
     std::cerr << "Could not open the Redis Persistent Database" << std::endl;
     return -1;
@@ -86,12 +85,41 @@ int Server::read_persistence() {
     std::string expiry = parse_value("[expiry]", line, "[/expiry]");
 
     DB_Entry entry = {value, std::strtoull(date.c_str(), NULL, 10), 0};
-    if (expiry != "null") {
+    if (expiry != "0") {
       entry.expiry = strtoull(expiry.c_str(), NULL, 10);
     }
     config.db.insert_or_assign(key, entry);
   }
   rdb.close();
+  return 0;
+}
+
+int Server::write_persistence() {
+  std::ofstream rdb(config.file, std::ios::app);
+  if (!rdb.is_open()) {
+    std::cerr << "Could not save to the Redis Persistent Database" << std::endl;
+    return -1;
+  }
+  uint64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                     std::chrono::system_clock::now().time_since_epoch())
+                     .count();
+  for (auto entry : config.in_memory_db) {
+    if (entry.second.expiry != 0 && entry.second.expiry < now) {
+      try {
+        config.db.at(entry.first);
+        config.db.erase(entry.first);
+      } catch (const std::exception &e) {
+      }
+      continue;
+    }
+    rdb << "[key]" << entry.first << "[/key]"
+        << "[value]" << entry.second.value << "[/value]"
+        << "[date]" << entry.second.date << "[/date]"
+        << "[expiry]" << entry.second.expiry << "[/expiry]\n";
+  }
+  rdb.close();
+  config.in_memory_db.clear();
+
   return 0;
 }
 
@@ -180,6 +208,11 @@ void Server::listen_connections() {
         }
       }
     }
+    /* Each connection is writting to the file persistence.
+     * TODO: Set a better trigger
+     * */
+    // if (config.in_memory_db.size() > 0)
+    //   write_persistence();
   }
   close(epoll_fd);
 }
