@@ -1,0 +1,2 @@
+[key]foo[/key][value]bar[/value][date]999[/date][expiry]null[/expiry]\r\n
+[key]bar[/key][value]baz[/value][date]888[/date][expiry]null[/expiry]\r\n

@@ -15,13 +15,10 @@
 #include <unistd.h>
 #include <unordered_map>
 
-// TODO: Study how to make this recursive instead of iterative
-
 class HandleResponse {
 
 public:
-  HandleResponse(RespData result, int client_fd, database &db,
-                 expire_database &expire_db);
+  HandleResponse(RespData result, int client_fd, DB_Config &config);
 
 private:
   const char *ping_response = "+PONG\r\n";
@@ -31,17 +28,13 @@ private:
   void ok();
   void null();
   void empty();
-  void array(RespData result, database &db, expire_database &expire_db);
+  void array(RespData result, DB_Config &config);
   void ping();
   void echo(size_t &i, const std::vector<RespData> &command_array);
-  void set(size_t &i, const std::vector<RespData> &command_array, database &db,
-           expire_database &expire_db);
-  void get(size_t &i, const std::vector<RespData> &command_array, database &db,
-           expire_database &expire_db);
+  void set(size_t &i, const std::vector<RespData> &command_array,
+           DB_Config &config);
+  void get(size_t &i, const std::vector<RespData> &command_array,
+           DB_Config &config);
 
-  void set_expire_ms(std::string key, std::string timecode_str,
-                     expire_database &expire_db);
-
-  int check_expire_ms(std::string key, database &db,
-                      expire_database &expire_db);
+  int check_expire_ms(std::string key, DB_Config &config);
 };

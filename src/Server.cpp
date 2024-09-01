@@ -2,8 +2,10 @@
 #include "HandleResponse.hpp"
 #include <algorithm>
 #include <asm-generic/errno.h>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <fstream>
 #include <iostream>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -11,14 +13,91 @@
 
 #define MAX_EVENTS 100
 
+Server::Server(int port, int argc, char **argv)
+    : m_connection_backlog(5), m_port(port) {
+  if (set_persistence(argc, argv) == -1)
+    exit(1);
+  if (init_server() < 0)
+    exit(1);
+}
+
+void Server::how_to_use() {
+  std::cout << "\n\tIncorrect input. How to use:\n\t"
+            << "./your_program.sh --dir /tmp/redis-files --dbfilename dump.rdb"
+            << std::endl;
+}
+
+int Server::set_persistence(int argc, char **argv) {
+  std::cout << "argc : " << argc << " argv: " << argv << std::endl;
+  if (argc != 5 && argc != 1)
+    return how_to_use(), -1;
+
+  if (argc == 1) {
+    std::cout << "Setting default values\n";
+    config.dir = ".";
+    config.db_filename = "default.rdb";
+    if (read_persistence() == -1)
+      return -1;
+    return 0;
+  }
+
+  if (strncmp(argv[1], "--dir", strlen(argv[1])) == 0)
+    config.dir = std::string(argv[2]);
+  else {
+    return how_to_use(), -1;
+  }
+  if (strncmp(argv[3], "--dbfilename", strlen(argv[3])) == 0)
+    config.db_filename = std::string(argv[4]);
+  else {
+    return how_to_use(), -1;
+  }
+  if (config.db_filename.substr(config.db_filename.length() - 4) != ".rdb")
+    return how_to_use(), -1;
+
+  if (read_persistence() == -1)
+    return -1;
+  return 0;
+}
+
+std::string Server::parse_value(const std::string &needle,
+                                const std::string &haystack,
+                                const std::string &separator) {
+  int start = haystack.find(needle) + strlen(needle.c_str());
+  int end = haystack.find(separator) - start;
+
+  return haystack.substr(start, end);
+}
+
+int Server::read_persistence() {
+
+  std::string file = config.dir + "/" + config.db_filename;
+
+  std::ifstream rdb(file);
+  if (!rdb.is_open()) {
+    std::cerr << "Could not open the Redis Persistent Database" << std::endl;
+    return -1;
+  }
+  std::string line;
+  while (getline(rdb, line)) {
+
+    std::string key = parse_value("[key]", line, "[/key]");
+    std::string value = parse_value("[value]", line, "[/value]");
+    std::string date = parse_value("[date]", line, "[/date]");
+    std::string expiry = parse_value("[expiry]", line, "[/expiry]");
+
+    DB_Entry entry = {value, std::strtoull(date.c_str(), NULL, 10), 0};
+    if (expiry != "null") {
+      entry.expiry = strtoull(expiry.c_str(), NULL, 10);
+    }
+    config.db.insert_or_assign(key, entry);
+  }
+  rdb.close();
+  return 0;
+}
+
 void Server::set_nonblocking(int sock) {
   int flags = fcntl(sock, F_GETFL, 0);
   fcntl(sock, F_SETFL, flags | O_NONBLOCK);
-}
-
-Server::Server(int port) : m_connection_backlog(5), m_port(port) {
-  if (init_server() < 0)
-    exit(1);
 }
 
 int Server::init_server() {
@@ -116,7 +195,6 @@ bool Server::handle_client(int client_fd) {
     }
   } else {
     buffer[bytes_read] = '\0'; // Null-terminate the received data
-    //
     std::cout << "\nRequest:\n" << buffer;
 
     RespParser parser;
@@ -124,7 +202,7 @@ bool Server::handle_client(int client_fd) {
     try {
       RespData result = parser.parse(std::string(buffer));
       parser.printRespData(result);
-      HandleResponse respond(result, client_fd, db, expire_db);
+      HandleResponse respond(result, client_fd, config);
 
     } catch (const std::exception &e) {
       std::cerr << "Error: " << e.what() << std::endl;

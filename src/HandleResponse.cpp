@@ -7,48 +7,33 @@
 #include <cstdlib>
 #include <iterator>
 
-void HandleResponse::set_expire_ms(std::string key, std::string timecode_str,
-                                   expire_database &expire_db) {
-  int64_t expiring_time = std::strtoll(timecode_str.c_str(), NULL, 10);
-  if (expiring_time < 0)
-    return;
-  uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                     std::chrono::system_clock::now().time_since_epoch())
-                     .count();
-  expire_db.insert_or_assign(key, expiring_time + now);
-  std::cout << "Assigned to db_expiry[" << key << "] : " << expiring_time
-            << "/ms" << std::endl;
-}
-
-int HandleResponse::check_expire_ms(std::string key, database &db,
-                                    expire_database &expire_db) {
-  if (expire_db.find(key) == expire_db.end())
+int HandleResponse::check_expire_ms(std::string key, DB_Config &config) {
+  if (config.db[key].expiry == 0)
     return 0;
   uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::system_clock::now().time_since_epoch())
                      .count();
   std::cout << "time left for db[" << key << "] : "
-            << static_cast<int64_t>(expire_db[key]) - static_cast<int64_t>(now)
+            << static_cast<int64_t>(config.db[key].expiry) -
+                   static_cast<int64_t>(now)
             << std::endl;
-  if (expire_db[key] > now)
+  if (config.db[key].expiry > now)
     return 0;
 
-  expire_db.erase(key);
-  db.erase(key);
+  config.db.erase(key);
   null();
   return 1;
 }
 
-HandleResponse::HandleResponse(RespData result, int client_fd, database &db,
-                               expire_database &expire_db)
+HandleResponse::HandleResponse(RespData result, int client_fd,
+                               DB_Config &config)
     : m_client_fd(client_fd) {
   if (result.type == RespType::Array) {
-    array(result, db, expire_db);
+    array(result, config);
   }
 }
 
-void HandleResponse::array(RespData result, database &db,
-                           expire_database &expire_db) {
+void HandleResponse::array(RespData result, DB_Config &config) {
   // Extract array
   const auto &command_array = std::get<std::vector<RespData>>(result.value);
   for (size_t i = 0; i <= command_array.size(); ++i) {
@@ -67,10 +52,12 @@ void HandleResponse::array(RespData result, database &db,
         echo(++i, command_array);
       }
       if (command_str == "SET") {
-        set(++i, command_array, db, expire_db);
+        std::cout << "DB Size before set: " << config.db.size() << std::endl;
+        set(++i, command_array, config);
+        std::cout << "DB Size after set: " << config.db.size() << std::endl;
       }
       if (command_str == "GET") {
-        get(++i, command_array, db, expire_db);
+        get(++i, command_array, config);
       }
     } else {
       ++i;
@@ -114,7 +101,7 @@ void HandleResponse::null() {
 }
 
 void HandleResponse::set(size_t &i, const std::vector<RespData> &command_array,
-                         database &db, expire_database &expire_db) {
+                         DB_Config &config) {
   size_t max_size = command_array.size();
   if (i >= max_size || command_array[i].type != RespType::BulkString) {
     null();
@@ -127,20 +114,32 @@ void HandleResponse::set(size_t &i, const std::vector<RespData> &command_array,
     return;
   }
   std::string value = std::get<std::string>(command_array[i++].value);
-  db.insert_or_assign(key, value);
-  std::cout << "Set map[" << key << "] = " << value << std::endl;
+  uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::system_clock::now().time_since_epoch())
+                     .count();
+  DB_Entry entry{value, now, 0};
+  config.db.insert_or_assign(key, entry);
   ok();
   if (i >= max_size)
     return;
   std::string next_cmd = std::get<std::string>(command_array[i].value);
-  if (next_cmd != "px")
+  if (next_cmd != "px") {
     return;
-  set_expire_ms(key, std::get<std::string>(command_array[++i].value),
-                expire_db);
+  }
+  entry.expiry =
+      now +
+      std::strtoull(std::get<std::string>(command_array[++i].value).c_str(),
+                    NULL, 10);
+  if (entry.expiry == 0)
+    return;
+  std::cout << "Assigned to db_expiry[" << key << "] : " << entry.expiry
+            << "/ms" << std::endl;
+  config.db.insert_or_assign(key, entry);
+  ok();
 }
 
 void HandleResponse::get(size_t &i, const std::vector<RespData> &command_array,
-                         database &db, expire_database &expire_db) {
+                         DB_Config &config) {
   size_t max_size = command_array.size();
   if (i > max_size || command_array[i].type != RespType::BulkString) {
     null();
@@ -148,10 +147,10 @@ void HandleResponse::get(size_t &i, const std::vector<RespData> &command_array,
   }
   std::string key = std::get<std::string>(command_array[i++].value);
   try {
-    db.at(key);
-    if (check_expire_ms(key, db, expire_db) == 1)
+    config.db.at(key);
+    if (check_expire_ms(key, config) == 1)
       return;
-    std::string value = db[key];
+    std::string value = config.db[key].value;
     std::string response = "$";
     response += std::to_string(value.length());
     response += "\r\n";
