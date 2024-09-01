@@ -124,7 +124,7 @@ bool Server::handle_client(int client_fd) {
     try {
       RespData result = parser.parse(std::string(buffer));
       parser.printRespData(result);
-      HandleResponse respond(result, client_fd, m_database);
+      HandleResponse respond(result, client_fd, db, expire_db);
 
     } catch (const std::exception &e) {
       std::cerr << "Error: " << e.what() << std::endl;
