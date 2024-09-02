@@ -2,6 +2,7 @@
 #include "HandleResponse.hpp"
 #include <algorithm>
 #include <asm-generic/errno.h>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
@@ -35,8 +36,8 @@ int Server::set_persistence(int argc, char **argv) {
     std::cout << "Setting default values\n";
     config.dir = ".";
     config.db_filename = "default.rdb";
-    // if (read_persistence() == -1)
-    //   return -1;
+    if (read_persistence() == -1)
+      return -1;
     return 0;
   }
 
@@ -67,29 +68,225 @@ std::string Server::parse_value(const std::string &needle,
   return haystack.substr(start, end);
 }
 
+/*
+Length encoding is used to store the length of the next object in the stream.
+Length encoding is a variable byte encoding designed to use as few bytes as
+possible.
+
+This is how length encoding works : Read one byte from the stream, compare the
+two most significant bits:
+
+Bits  How to parse
+00    The next 6 bits represent the length
+01    Read one additional byte. The combined 14 bits represent the length
+10    Discard the remaining 6 bits. The next 4 bytes from the stream represent
+      the length
+11    The next object is encoded in a special format. The remaining 6
+      bits indicate the format. May be used to store numbers or Strings, see
+      String Encoding
+
+As a result of this encoding:
+Numbers up to and including 63 can be stored in 1 byte
+Numbers up to and including 16383 can be stored in 2 bytes
+Numbers up to 2^32 -1 can be stored in 4 bytes
+*/
+uint64_t get_str_bytes_len(std::ifstream &rdb) {
+  uint8_t first_byte;
+  //!!!!!! without reinterpret_cast<char*> the read() function won't work
+  rdb.read(reinterpret_cast<char *>(&first_byte), 1);
+
+  // 0xCO = 11000000
+  // if first_byte & 0xCO == 0, means that the MSBs of first_byte is 0
+  if ((first_byte & 0xC0) == 0) {
+    // 0x3F = 00111111
+    // first_byte & 0x3F returns the lower 6-bits
+    return first_byte & 0x3F;
+  }
+
+  // 0x40 = 01000000
+  if ((first_byte & 0xC0) == 0x40) {
+    uint8_t next_byte; // this holds the next 8-bits
+    rdb.read(reinterpret_cast<char *>(&next_byte), 1);
+    // Combine the previous 6 with the next 8; 14-bits in total
+    uint64_t length = ((first_byte & 0x3F) << 8) | next_byte;
+    return length;
+  }
+  // 0x80 = 10000000
+  if ((first_byte & 0xC0) == 0x80) {
+    // Instead of reading byte a byte like before, now C++ has tools
+    uint32_t length;
+    rdb.read(reinterpret_cast<char *>(&length), sizeof(length));
+    length = be32toh(length); // Convert from big-endian to host
+    return length;
+  }
+  if (first_byte == 0xFB) {
+    // This is a special case for database sizes
+    return first_byte;
+  }
+
+  std::cout << "Special encoding or error in length byte" << std::endl;
+  return 0;
+}
+
+/* About string encoding:
+  https://rdb.fnordig.de/file_format.html#length-encoding
+
+  There are three types of Strings in Redis:
+
+  > Length prefixed strings
+  > An 8, 16 or 32 bit integer - pending to implement
+  > A LZF compressed string - pending to implement
+
+ Length prefixed strings are quite simple. The length of the string in bytes is
+ first encoded using Length Encoding. After this, the raw bytes of the string
+ are stored.
+ */
+
+std::string read_byte_to_string(std::ifstream &rdb) {
+
+  uint64_t len = get_str_bytes_len(rdb);
+
+  std::vector<char> buffer(len);
+  rdb.read(buffer.data(), len);
+
+  return std::string(buffer.data(), len);
+}
+
+// encoding -> https://rdb.fnordig.de/file_format.html#length-encoding
+// https://github.com/sripathikrishnan/redis-rdb-tools/wiki/Redis-RDB-Dump-File-Format
+// https://app.codecrafters.io/courses/redis/stages/jz6
+// https://rdb.fnordig.de/file_format.html
+/*
+At a high level, the RDB file has the following structure
+
+----------------------------#
+52 45 44 49 53              # Magic String "REDIS"
+30 30 30 33                 # RDB Version Number as ASCII string. "0003" = 3
+----------------------------
+FA                          # Auxiliary field
+$string-encoded-key         # May contain arbitrary metadata
+$string-encoded-value       # such as Redis version, creation time, used memory,
+...
+----------------------------
+FE 00                       # Indicates database selector. db number = 00
+FB                          # Indicates a resizedb field
+$length-encoded-int         # Size of the corresponding hash table
+$length-encoded-int         # Size of the corresponding expire hash table
+----------------------------# Key-Value pair starts
+FD $unsigned-int            # "expiry time in seconds", followed by 4 byte
+unsigned int $value-type                 # 1 byte flag indicating the type of
+value $string-encoded-key         # The key, encoded as a redis string
+$encoded-value              # The value, encoding depends on $value-type
+----------------------------
+FC $unsigned long           # "expiry time in ms", followed by 8 byte unsigned
+long $value-type                 # 1 byte flag indicating the type of value
+$string-encoded-key         # The key, encoded as a redis string
+$encoded-value              # The value, encoding depends on $value-type
+----------------------------
+$value-type                 # key-value pair without expiry
+$string-encoded-key
+$encoded-value
+----------------------------
+FE $length-encoding         # Previous db ends, next db starts.
+----------------------------
+...                         # Additional key-value pairs, databases, ...
+
+FF                          ## End of RDB file indicator
+8-byte-checksum             ## CRC64 checksum of the entire file.
+ */
 int Server::read_persistence() {
-
   config.file = config.dir + "/" + config.db_filename;
-
-  std::ifstream rdb(config.file);
+  std::ifstream rdb(config.file, std::ios::binary);
   if (!rdb.is_open()) {
-    std::cerr << "Could not open the Redis Persistent Database" << std::endl;
+    std::cerr << "Could not open the Redis Persistent Database: " << config.file
+              << std::endl;
     return -1;
   }
-  std::string line;
-  while (getline(rdb, line)) {
 
-    std::string key = parse_value("[key]", line, "[/key]");
-    std::string value = parse_value("[value]", line, "[/value]");
-    std::string date = parse_value("[date]", line, "[/date]");
-    std::string expiry = parse_value("[expiry]", line, "[/expiry]");
+  char header[9];
+  rdb.read(header, 9);
+  std::cout << "Header: " << std::string(header, 9) << std::endl;
+  // if (std::string(header, 9) != "REDIS0003") {
+  //   std::cerr << "Incompatible file format or version" << std::endl;
+  //   std::cerr << "But we will try it" << std::endl;
+  //   // return -1;
+  // }
 
-    DB_Entry entry = {value, std::strtoull(date.c_str(), NULL, 10), 0};
-    if (expiry != "0") {
-      entry.expiry = strtoull(expiry.c_str(), NULL, 10);
+  // Skip metadata
+  while (true) {
+    char opcode;
+    if (!rdb.read(&opcode, 1)) {
+      std::cout << "Reached end of file while looking for database start"
+                << std::endl;
+      return 0;
     }
-    config.db.insert_or_assign(key, entry);
+    if (opcode == 0xFE) // Database selector
+      break;
+    if (opcode == 0xFF) // End of the RDB file
+      return 0;
+    // Skip metadata key and value
+    read_byte_to_string(rdb);
+    read_byte_to_string(rdb);
   }
+
+  // Read database index (usually 0). It's the value following 0xFE
+  // 0xFE 00 = db number = 00
+  uint64_t db_index = get_str_bytes_len(rdb);
+
+  // Read hash table size info
+  char size_info;
+  rdb.read(&size_info, 1);
+  if (size_info == 0xFB) { // 0xFB = resizedb field
+    uint64_t hash_table_size = get_str_bytes_len(rdb);
+    uint64_t expire_hash_table_size = get_str_bytes_len(rdb);
+    // std::cout << "Hash table size: "
+    //           << hash_table_size
+    //           << std::endl;
+  }
+
+  // Read key-value pairs
+  while (true) {
+    char opcode;
+    if (!rdb.read(&opcode, 1)) {
+      std::cout << "Reached end of file while reading database" << std::endl;
+      break;
+    }
+    if (opcode == 0xFF) {
+      std::cout << "Reached end of database marker" << std::endl;
+      break;
+    }
+
+    uint64_t expire_time = 0;
+    uint64_t expire_date = 0;
+    if (opcode == 0xFD) { // expiry time in seconds followed by 4 byte - be32toh
+      uint32_t seconds;
+      rdb.read(reinterpret_cast<char *>(&seconds), sizeof(seconds));
+      expire_time = be32toh(seconds);
+      rdb.read(&opcode, 1);
+    }
+    if (opcode == 0xFC) { // expiry time in ms, followd by 8 byte
+                          // unsigned - be64toh
+      rdb.read(reinterpret_cast<char *>(&expire_time), sizeof(expire_time));
+      expire_date = be64toh(expire_time);
+      rdb.read(&opcode, 1);
+    }
+
+    // After 0xFD and 0x FC, comes the key-pair-value
+    // The first byte is the size
+    std::string key = read_byte_to_string(rdb);
+    std::string value = read_byte_to_string(rdb);
+
+    uint64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+    // std::cout << "now: " << now << " expire_time: " << expire_time
+    //           << " result: " << (expire_time > now) << std::endl;
+    // std::cout << "Key: '" << key << "', Value: '" << value << "'" <<
+    // std::endl; std::cout << "Expires at: " << expire_date << std::endl;
+    if (expire_time == 0 || expire_time > now)
+      config.db.insert_or_assign(key, DB_Entry({value, 0, expire_time}));
+  }
+
   rdb.close();
   return 0;
 }

@@ -1,3 +1,7 @@
+# Utils
+default.rdb
+buildrdb.py
+
 # Prerequisites
 *.d
 
