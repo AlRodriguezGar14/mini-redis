@@ -1,5 +1,6 @@
 #include "Server.hpp"
 #include "HandleResponse.hpp"
+#include "Parser.hpp"
 #include <algorithm>
 #include <asm-generic/errno.h>
 #include <cstdint>
@@ -54,8 +55,8 @@ int Server::set_persistence(int argc, char **argv) {
   if (config.db_filename.substr(config.db_filename.length() - 4) != ".rdb")
     return how_to_use(), -1;
 
-  // if (read_persistence() == -1)
-  //   return -1;
+  if (read_persistence() == -1)
+    return -1;
   return 0;
 }
 
@@ -206,13 +207,8 @@ int Server::read_persistence() {
   char header[9];
   rdb.read(header, 9);
   std::cout << "Header: " << std::string(header, 9) << std::endl;
-  // if (std::string(header, 9) != "REDIS0003") {
-  //   std::cerr << "Incompatible file format or version" << std::endl;
-  //   std::cerr << "But we will try it" << std::endl;
-  //   // return -1;
-  // }
 
-  // Skip metadata
+  // metadata
   while (true) {
     char opcode;
     if (!rdb.read(&opcode, 1)) {
@@ -220,71 +216,70 @@ int Server::read_persistence() {
                 << std::endl;
       return 0;
     }
-    if (opcode == 0xFE) // Database selector
+
+    if (opcode == 0xFA) {
+      std::string key = read_byte_to_string(rdb);
+      std::string value = read_byte_to_string(rdb);
+      std::cout << key << " " << value << std::endl;
+    }
+    if (opcode == 0xFE) {
+      uint64_t db_number = get_str_bytes_len(rdb);
+      std::cout << "Database number: " << db_number << std::endl;
+    }
+    if (opcode == 0xFB) {
+      uint64_t hash_table_size = get_str_bytes_len(rdb);
+      uint64_t expire_hash_table_size = get_str_bytes_len(rdb);
+      std::cout << "Hash table size: " << hash_table_size
+                << ", Expire hash table size: " << expire_hash_table_size
+                << std::endl;
       break;
-    if (opcode == 0xFF) // End of the RDB file
-      return 0;
-    // Skip metadata key and value
-    read_byte_to_string(rdb);
-    read_byte_to_string(rdb);
-  }
-
-  // Read database index (usually 0). It's the value following 0xFE
-  // 0xFE 00 = db number = 00
-  uint64_t db_index = get_str_bytes_len(rdb);
-
-  // Read hash table size info
-  char size_info;
-  rdb.read(&size_info, 1);
-  if (size_info == 0xFB) { // 0xFB = resizedb field
-    uint64_t hash_table_size = get_str_bytes_len(rdb);
-    uint64_t expire_hash_table_size = get_str_bytes_len(rdb);
-    // std::cout << "Hash table size: "
-    //           << hash_table_size
-    //           << std::endl;
+    }
   }
 
   // Read key-value pairs
   while (true) {
     char opcode;
     if (!rdb.read(&opcode, 1)) {
-      std::cout << "Reached end of file while reading database" << std::endl;
+      std::cout << "Reached end of file" << std::endl;
       break;
     }
     if (opcode == 0xFF) {
       std::cout << "Reached end of database marker" << std::endl;
+      uint64_t checksum;
+      rdb.read(reinterpret_cast<char *>(&checksum), sizeof(checksum));
+      checksum = be64toh(checksum);
+      std::cout << "db checksum: " << checksum << std::endl;
       break;
     }
 
     uint64_t expire_time = 0;
     uint64_t expire_date = 0;
-    if (opcode == 0xFD) { // expiry time in seconds followed by 4 byte - be32toh
+    if (opcode ==
+        0xFD) { // expiry time in seconds followed by 4 byte - uint32_t
       uint32_t seconds;
       rdb.read(reinterpret_cast<char *>(&seconds), sizeof(seconds));
       expire_time = be32toh(seconds);
       rdb.read(&opcode, 1);
     }
     if (opcode == 0xFC) { // expiry time in ms, followd by 8 byte
-                          // unsigned - be64toh
+                          // unsigned - uint64_t
       rdb.read(reinterpret_cast<char *>(&expire_time), sizeof(expire_time));
       expire_date = be64toh(expire_time);
       rdb.read(&opcode, 1);
     }
 
     // After 0xFD and 0x FC, comes the key-pair-value
-    // The first byte is the size
     std::string key = read_byte_to_string(rdb);
     std::string value = read_byte_to_string(rdb);
 
     uint64_t now = std::chrono::duration_cast<std::chrono::seconds>(
                        std::chrono::system_clock::now().time_since_epoch())
                        .count();
-    // std::cout << "now: " << now << " expire_time: " << expire_time
-    //           << " result: " << (expire_time > now) << std::endl;
-    // std::cout << "Key: '" << key << "', Value: '" << value << "'" <<
-    // std::endl; std::cout << "Expires at: " << expire_date << std::endl;
-    if (expire_time == 0 || expire_time > now)
+    if (expire_time == 0 || expire_time > now) {
+      std::cout << "adding " << key << " to the in memory database"
+                << std::endl;
       config.db.insert_or_assign(key, DB_Entry({value, 0, expire_time}));
+    }
   }
 
   rdb.close();

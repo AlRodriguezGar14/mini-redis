@@ -30,6 +30,7 @@ private:
   void empty();
   void array(RespData result, DB_Config &config);
   void ping();
+  int send_entry(DB_Config &config, const std::string &key);
   void echo(size_t &i, const std::vector<RespData> &command_array);
   void set(size_t &i, const std::vector<RespData> &command_array,
            DB_Config &config);
@@ -37,6 +38,8 @@ private:
            DB_Config &config);
   void config_req(size_t &i, const std::vector<RespData> &command_array,
                   const DB_Config &config);
+  void keys(size_t &i, const std::vector<RespData> &command_array,
+            DB_Config &config);
 
   int check_expire_ms(std::string key, DB_Config &config);
 };

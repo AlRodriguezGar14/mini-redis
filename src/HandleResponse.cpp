@@ -6,17 +6,16 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iterator>
+#include <string>
 
 int HandleResponse::check_expire_ms(std::string key, DB_Config &config) {
+
   if (config.db[key].expiry == 0)
     return 0;
-  uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+  std::cout << "Checking expiry: " << key << std::endl;
+  uint64_t now = std::chrono::duration_cast<std::chrono::seconds>(
                      std::chrono::system_clock::now().time_since_epoch())
                      .count();
-  std::cout << "time left for db[" << key << "] : "
-            << static_cast<int64_t>(config.db[key].expiry) -
-                   static_cast<int64_t>(now)
-            << std::endl;
   if (config.db[key].expiry > now)
     return 0;
 
@@ -69,38 +68,29 @@ void HandleResponse::config_req(size_t &i,
   }
 }
 
-void HandleResponse::array(RespData result, DB_Config &config) {
-  // Extract array
-  const auto &command_array = std::get<std::vector<RespData>>(result.value);
-  for (size_t i = 0; i <= command_array.size(); ++i) {
-    const auto &command = command_array[i];
-    // Extract each command based on type std::get()
-    if (command.type == RespType::BulkString) {
-      std::string command_str = std::get<std::string>(command.value);
-      std::transform(command_str.begin(), command_str.end(),
-                     command_str.begin(), ::toupper);
+void HandleResponse::keys(size_t &i, const std::vector<RespData> &command_array,
+                          DB_Config &config) {
+  if (i > command_array.size() || command_array[i].type != RespType::BulkString)
+    return;
 
-      if (command_str == "PING") {
-        ping();
-        ++i;
-      }
-      if (command_str == "ECHO") {
-        echo(++i, command_array);
-      }
-      if (command_str == "SET") {
-        set(++i, command_array, config);
-      }
-      if (command_str == "GET") {
-        get(++i, command_array, config);
-      }
-      if (command_str == "CONFIG") {
-        config_req(++i, command_array, config);
-      }
-    } else {
-      ++i;
+  std::string cmd = std::get<std::string>(command_array[i++].value);
+  std::string response;
+  if (cmd == "*") {
+    response += "*";
+    response += std::to_string(config.db.size());
+    response += "\r\n";
+    for (auto &entry : config.db) {
+      std::string key = entry.first;
+      response += "$";
+      response += std::to_string(key.length());
+      response += "\r\n";
+      response += key;
+      response += "\r\n";
     }
   }
+  send(m_client_fd, response.c_str(), response.length(), 0);
 }
+
 void HandleResponse::ping() {
   send(m_client_fd, ping_response, strlen(ping_response), 0);
 }
@@ -178,19 +168,13 @@ void HandleResponse::set(size_t &i, const std::vector<RespData> &command_array,
   ok();
 }
 
-void HandleResponse::get(size_t &i, const std::vector<RespData> &command_array,
-                         DB_Config &config) {
-  size_t max_size = command_array.size();
-  if (i > max_size || command_array[i].type != RespType::BulkString) {
-    null();
-    return;
-  }
-  std::string key = std::get<std::string>(command_array[i++].value);
+int HandleResponse::send_entry(DB_Config &config, const std::string &key) {
   try {
     config.db.at(key);
     if (check_expire_ms(key, config) == 1)
-      return;
+      return -1;
     std::string value = config.db[key].value;
+    // std::cout << "Delivering: " << key << std::endl;
     std::string response = "$";
     response += std::to_string(value.length());
     response += "\r\n";
@@ -200,6 +184,55 @@ void HandleResponse::get(size_t &i, const std::vector<RespData> &command_array,
   } catch (std::exception &e) {
     std::cerr << "Map error, key not found: " << e.what() << std::endl;
     null();
+    return -1;
   }
+  return 0;
+}
+
+void HandleResponse::get(size_t &i, const std::vector<RespData> &command_array,
+                         DB_Config &config) {
+  size_t max_size = command_array.size();
+  if (i > max_size || command_array[i].type != RespType::BulkString) {
+    null();
+    return;
+  }
+  std::string key = std::get<std::string>(command_array[i++].value);
+  send_entry(config, key);
   return;
+}
+
+void HandleResponse::array(RespData result, DB_Config &config) {
+  // Extract array
+  const auto &command_array = std::get<std::vector<RespData>>(result.value);
+  for (size_t i = 0; i <= command_array.size(); ++i) {
+    const auto &command = command_array[i];
+    // Extract each command based on type std::get()
+    if (command.type == RespType::BulkString) {
+      std::string command_str = std::get<std::string>(command.value);
+      std::transform(command_str.begin(), command_str.end(),
+                     command_str.begin(), ::toupper);
+
+      if (command_str == "PING") {
+        ping();
+        ++i;
+      }
+      if (command_str == "ECHO") {
+        echo(++i, command_array);
+      }
+      if (command_str == "SET") {
+        set(++i, command_array, config);
+      }
+      if (command_str == "GET") {
+        get(++i, command_array, config);
+      }
+      if (command_str == "CONFIG") {
+        config_req(++i, command_array, config);
+      }
+      if (command_str == "KEYS") {
+        keys(++i, command_array, config);
+      }
+    } else {
+      ++i;
+    }
+  }
 }
