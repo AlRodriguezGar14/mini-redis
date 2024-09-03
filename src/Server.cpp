@@ -77,7 +77,7 @@ possible.
 This is how length encoding works : Read one byte from the stream, compare the
 two most significant bits:
 
-Bits  How to parse
+Bits  How to parse - read the two most important bits first
 00    The next 6 bits represent the length
 01    Read one additional byte. The combined 14 bits represent the length
 10    Discard the remaining 6 bits. The next 4 bytes from the stream represent
@@ -91,66 +91,100 @@ Numbers up to and including 63 can be stored in 1 byte
 Numbers up to and including 16383 can be stored in 2 bytes
 Numbers up to 2^32 -1 can be stored in 4 bytes
 */
-uint64_t get_str_bytes_len(std::ifstream &rdb) {
-  uint8_t first_byte;
-  //!!!!!! without reinterpret_cast<char*> the read() function won't work
-  rdb.read(reinterpret_cast<char *>(&first_byte), 1);
+#include <cassert>
+#include <optional>
 
-  // 0xCO = 11000000
-  // if first_byte & 0xCO == 0, means that the MSBs of first_byte is 0
-  if ((first_byte & 0xC0) == 0) {
-    // 0x3F = 00111111
-    // first_byte & 0x3F returns the lower 6-bits
-    return first_byte & 0x3F;
-  }
-
-  // 0x40 = 01000000
-  if ((first_byte & 0xC0) == 0x40) {
-    uint8_t next_byte; // this holds the next 8-bits
-    rdb.read(reinterpret_cast<char *>(&next_byte), 1);
-    // Combine the previous 6 with the next 8; 14-bits in total
-    uint64_t length = ((first_byte & 0x3F) << 8) | next_byte;
-    return length;
-  }
-  // 0x80 = 10000000
-  if ((first_byte & 0xC0) == 0x80) {
-    // Instead of reading byte a byte like before, now C++ has tools
-    uint32_t length;
-    rdb.read(reinterpret_cast<char *>(&length), sizeof(length));
-    length = be32toh(length); // Convert from big-endian to host
-    return length;
-  }
-  if (first_byte == 0xFB) {
-    // This is a special case for database sizes
-    return first_byte;
-  }
-
-  std::cout << "Special encoding or error in length byte" << std::endl;
-  return 0;
+template <typename T = char> T read(std::ifstream &rdb) {
+  T val;
+  rdb.read(reinterpret_cast<char *>(&val), sizeof(val));
+  return val;
 }
 
-/* About string encoding:
-  https://rdb.fnordig.de/file_format.html#length-encoding
+std::pair<std::optional<uint64_t>, std::optional<int8_t>>
+get_str_bytes_len(std::ifstream &rdb) {
+  // Read the first byte from the RDB file
+  auto byte = read<uint8_t>(rdb);
 
-  There are three types of Strings in Redis:
+  // Get the two most significant bits of the byte
+  // These bits determine how the length is encoded
+  auto sig = byte >> 6; // 0 bytes, 1, 2, 3 - 00, 01, 10, 11
 
-  > Length prefixed strings
-  > An 8, 16 or 32 bit integer - pending to implement
-  > A LZF compressed string - pending to implement
-
- Length prefixed strings are quite simple. The length of the string in bytes is
- first encoded using Length Encoding. After this, the raw bytes of the string
- are stored.
- */
+  switch (sig) {
+  case 0: {
+    // If the two most significant bits are 00
+    // The length is the lower 6 bits of the byte
+    return {byte & 0x3F, std::nullopt};
+  }
+  case 1: {
+    // If the two most significant bits are 01
+    // The length is the lower 6 bits of the first byte and the whole next byte
+    auto next_byte = read<uint8_t>(rdb);
+    uint64_t sz = ((byte & 0x3F) << 8) | next_byte;
+    return {sz, std::nullopt};
+  }
+  case 2: {
+    // If the two most significant bits are 10
+    // The length is the next 4 bytes
+    uint64_t sz = 0;
+    for (int i = 0; i < 4; i++) {
+      auto byte = read<uint8_t>(rdb);
+      sz = (sz << 8) | byte;
+    }
+    return {sz, std::nullopt};
+  }
+  case 3: {
+    // If the two most significant bits are 11
+    // The string is encoded as an integer
+    switch (byte) {
+    case 0xC0:
+      // The string is encoded as an 8-bit integer of 1 byte
+      return {std::nullopt, 8};
+    case 0xC1:
+      // The string is encoded as a 16-bit integer of 2 bytes
+      return {std::nullopt, 16};
+    case 0xC2:
+      // The string is encoded as a 32-bit integer of 4 bytes
+      return {std::nullopt, 32};
+    case 0xFD:
+      // Special case for database sizes
+      return {byte, std::nullopt};
+    default:
+      return {std::nullopt, 0};
+    }
+  }
+  }
+  return {std::nullopt, 0};
+}
 
 std::string read_byte_to_string(std::ifstream &rdb) {
+  std::pair<std::optional<uint64_t>, std::optional<int8_t>> decoded_size =
+      get_str_bytes_len(rdb);
 
-  uint64_t len = get_str_bytes_len(rdb);
-
-  std::vector<char> buffer(len);
-  rdb.read(buffer.data(), len);
-
-  return std::string(buffer.data(), len);
+  if (decoded_size.first.has_value()) { // the length of the string is prefixed
+    int size = decoded_size.first.value();
+    std::vector<char> buffer(size);
+    rdb.read(buffer.data(), size);
+    return std::string(buffer.data(), size);
+  }
+  assert(
+      decoded_size.second.has_value()); // the string is encoded as an integer
+  int type = decoded_size.second.value();
+  switch (type) {
+  case 8: {
+    auto val = read<int8_t>(rdb);
+    return std::to_string(val);
+  }
+  case 16: { // 16 bit integer, 2 bytes
+    auto val = read<int16_t>(rdb);
+    return std::to_string(val);
+  }
+  case 32: { // 32 bit integer, 4 bytes
+    auto val = read<int32_t>(rdb);
+    return std::to_string(val);
+  }
+  default:
+    return "";
+  }
 }
 
 // encoding -> https://rdb.fnordig.de/file_format.html#length-encoding
@@ -166,7 +200,8 @@ At a high level, the RDB file has the following structure
 ----------------------------
 FA                          # Auxiliary field
 $string-encoded-key         # May contain arbitrary metadata
-$string-encoded-value       # such as Redis version, creation time, used memory,
+$string-encoded-value       # such as Redis version, creation time, used
+memory,
 ...
 ----------------------------
 FE 00                       # Indicates database selector. db number = 00
@@ -223,15 +258,23 @@ int Server::read_persistence() {
       std::cout << key << " " << value << std::endl;
     }
     if (opcode == 0xFE) {
-      uint64_t db_number = get_str_bytes_len(rdb);
-      std::cout << "Database number: " << db_number << std::endl;
+      auto db_number = get_str_bytes_len(rdb);
+      if (db_number.first.has_value()) {
+        std::cout << "Database number: " << db_number.first.value()
+                  << std::endl;
+        opcode =
+            read<char>(rdb); // Read the next opcode after the database number
+      }
     }
     if (opcode == 0xFB) {
-      uint64_t hash_table_size = get_str_bytes_len(rdb);
-      uint64_t expire_hash_table_size = get_str_bytes_len(rdb);
-      std::cout << "Hash table size: " << hash_table_size
-                << ", Expire hash table size: " << expire_hash_table_size
-                << std::endl;
+      auto hash_table_size = get_str_bytes_len(rdb);
+      auto expire_hash_table_size = get_str_bytes_len(rdb);
+      if (hash_table_size.first.has_value() &&
+          expire_hash_table_size.first.has_value()) {
+        std::cout << "Hash table size: " << hash_table_size.first.value()
+                  << ", Expire hash table size: "
+                  << expire_hash_table_size.first.value() << std::endl;
+      }
       break;
     }
   }
@@ -276,8 +319,7 @@ int Server::read_persistence() {
                        std::chrono::system_clock::now().time_since_epoch())
                        .count();
     if (expire_time == 0 || expire_time > now) {
-      std::cout << "adding " << key << " to the in memory database"
-                << std::endl;
+      std::cout << "adding " << key << " - " << value << std::endl;
       config.db.insert_or_assign(key, DB_Entry({value, 0, expire_time}));
     }
   }
