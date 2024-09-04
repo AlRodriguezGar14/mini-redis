@@ -244,12 +244,51 @@ int Server::read_persistence() {
   std::cout << "Header: " << std::string(header, 9) << std::endl;
 
   // metadata
+  // while (true) {
+  //   char opcode;
+  //   if (!rdb.read(&opcode, 1)) {
+  //     std::cout << "Reached end of file while looking for database start"
+  //               << std::endl;
+  //     return 0;
+  //   }
+  //
+  //   if (opcode == 0xFA) {
+  //     std::string key = read_byte_to_string(rdb);
+  //     std::string value = read_byte_to_string(rdb);
+  //     std::cout << "AUX: " << key << " " << value << std::endl;
+  //   }
+  //   if (opcode == 0xFE) {
+  //     auto db_number = get_str_bytes_len(rdb);
+  //     if (db_number.first.has_value()) {
+  //       std::cout << "SELECTDB: Database number: " << db_number.first.value()
+  //                 << std::endl;
+  //       opcode =
+  //           read<char>(rdb); // Read the next opcode after the database
+  //           number
+  //     }
+  //   }
+  //   if (opcode == 0xFB) {
+  //     auto hash_table_size = get_str_bytes_len(rdb);
+  //     auto expire_hash_table_size = get_str_bytes_len(rdb);
+  //     if (hash_table_size.first.has_value() &&
+  //         expire_hash_table_size.first.has_value()) {
+  //       std::cout << "RESIZEDB: Hash table size: "
+  //                 << hash_table_size.first.value()
+  //                 << ", Expire hash table size: "
+  //                 << expire_hash_table_size.first.value() << std::endl;
+  //     }
+  //     break;
+  //   }
+  // }
+
+  bool expire_read_ms = true;
+  bool expire_read_s = false;
+  // Read key-value pairs
   while (true) {
     char opcode;
     if (!rdb.read(&opcode, 1)) {
-      std::cout << "Reached end of file while looking for database start"
-                << std::endl;
-      return 0;
+      std::cout << "Reached end of file" << std::endl;
+      break;
     }
 
     if (opcode == 0xFA) {
@@ -276,16 +315,6 @@ int Server::read_persistence() {
                   << ", Expire hash table size: "
                   << expire_hash_table_size.first.value() << std::endl;
       }
-      break;
-    }
-  }
-
-  // Read key-value pairs
-  while (true) {
-    char opcode;
-    if (!rdb.read(&opcode, 1)) {
-      std::cout << "Reached end of file" << std::endl;
-      break;
     }
     if (opcode == 0xFF) {
       std::cout << "EOF: Reached end of database marker" << std::endl;
@@ -304,6 +333,7 @@ int Server::read_persistence() {
       rdb.read(reinterpret_cast<char *>(&seconds), sizeof(seconds));
       expire_time_s = be32toh(seconds);
       rdb.read(&opcode, 1);
+      expire_read_s = !expire_read_s;
       std::cout << "EXPIRETIME: " << expire_time_ms << std::endl;
     }
     if (opcode == 0xFC) { // expiry time in ms, followd by 8 byte
@@ -312,19 +342,24 @@ int Server::read_persistence() {
                sizeof(expire_time_ms));
       expire_time_ms = be64toh(expire_time_ms);
       rdb.read(&opcode, 1);
+      expire_read_ms = !expire_read_ms;
       std::cout << "EXPIRETIMEMS: " << expire_time_ms << std::endl;
     }
 
-    // After 0xFD and 0x FC, comes the key-pair-value
-    std::string key = read_byte_to_string(rdb);
-    std::string value = read_byte_to_string(rdb);
+    if (expire_read_ms && expire_read_s) {
+      // After 0xFD and 0x FC, comes the key-pair-value
+      std::string key = read_byte_to_string(rdb);
+      std::string value = read_byte_to_string(rdb);
 
-    uint64_t now = std::chrono::duration_cast<std::chrono::seconds>(
-                       std::chrono::system_clock::now().time_since_epoch())
-                       .count();
-    if (expire_time_s == 0 || expire_time_ms > now) {
-      std::cout << "adding " << key << " - " << value << std::endl;
-      config.db.insert_or_assign(key, DB_Entry({value, 0, expire_time_s}));
+      uint64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+      if (expire_time_s == 0 || expire_time_ms > now) {
+        std::cout << "adding " << key << " - " << value << std::endl;
+        config.db.insert_or_assign(key, DB_Entry({value, 0, expire_time_s}));
+      }
+      expire_read_ms = !expire_read_ms;
+      expire_read_s = !expire_read_s;
     }
   }
 
