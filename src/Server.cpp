@@ -255,12 +255,12 @@ int Server::read_persistence() {
     if (opcode == 0xFA) {
       std::string key = read_byte_to_string(rdb);
       std::string value = read_byte_to_string(rdb);
-      std::cout << key << " " << value << std::endl;
+      std::cout << "AUX: " << key << " " << value << std::endl;
     }
     if (opcode == 0xFE) {
       auto db_number = get_str_bytes_len(rdb);
       if (db_number.first.has_value()) {
-        std::cout << "Database number: " << db_number.first.value()
+        std::cout << "SELECTDB: Database number: " << db_number.first.value()
                   << std::endl;
         opcode =
             read<char>(rdb); // Read the next opcode after the database number
@@ -271,7 +271,8 @@ int Server::read_persistence() {
       auto expire_hash_table_size = get_str_bytes_len(rdb);
       if (hash_table_size.first.has_value() &&
           expire_hash_table_size.first.has_value()) {
-        std::cout << "Hash table size: " << hash_table_size.first.value()
+        std::cout << "RESIZEDB: Hash table size: "
+                  << hash_table_size.first.value()
                   << ", Expire hash table size: "
                   << expire_hash_table_size.first.value() << std::endl;
       }
@@ -287,7 +288,7 @@ int Server::read_persistence() {
       break;
     }
     if (opcode == 0xFF) {
-      std::cout << "Reached end of database marker" << std::endl;
+      std::cout << "EOF: Reached end of database marker" << std::endl;
       uint64_t checksum;
       rdb.read(reinterpret_cast<char *>(&checksum), sizeof(checksum));
       checksum = be64toh(checksum);
@@ -295,20 +296,23 @@ int Server::read_persistence() {
       break;
     }
 
-    uint64_t expire_time = 0;
-    uint64_t expire_date = 0;
+    uint64_t expire_time_s = 0;
+    uint64_t expire_time_ms = 0;
     if (opcode ==
         0xFD) { // expiry time in seconds followed by 4 byte - uint32_t
       uint32_t seconds;
       rdb.read(reinterpret_cast<char *>(&seconds), sizeof(seconds));
-      expire_time = be32toh(seconds);
+      expire_time_s = be32toh(seconds);
       rdb.read(&opcode, 1);
+      std::cout << "EXPIRETIME: " << expire_time_ms << std::endl;
     }
     if (opcode == 0xFC) { // expiry time in ms, followd by 8 byte
                           // unsigned - uint64_t
-      rdb.read(reinterpret_cast<char *>(&expire_time), sizeof(expire_time));
-      expire_date = be64toh(expire_time);
+      rdb.read(reinterpret_cast<char *>(&expire_time_ms),
+               sizeof(expire_time_ms));
+      expire_time_ms = be64toh(expire_time_ms);
       rdb.read(&opcode, 1);
+      std::cout << "EXPIRETIMEMS: " << expire_time_ms << std::endl;
     }
 
     // After 0xFD and 0x FC, comes the key-pair-value
@@ -318,9 +322,9 @@ int Server::read_persistence() {
     uint64_t now = std::chrono::duration_cast<std::chrono::seconds>(
                        std::chrono::system_clock::now().time_since_epoch())
                        .count();
-    if (expire_time == 0 || expire_time > now) {
+    if (expire_time_s == 0 || expire_time_ms > now) {
       std::cout << "adding " << key << " - " << value << std::endl;
-      config.db.insert_or_assign(key, DB_Entry({value, 0, expire_time}));
+      config.db.insert_or_assign(key, DB_Entry({value, 0, expire_time_s}));
     }
   }
 
