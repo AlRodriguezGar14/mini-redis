@@ -13,29 +13,9 @@
 #include <unordered_set>
 #include <vector>
 
+#include "DB.hpp"
 #include "Parser.hpp"
-
-// Redis request parser
-struct Request {
-  std::string command;
-  std::vector<std::string> args;
-};
-
-struct DB_Entry {
-  std::string value;
-  uint64_t date;
-  uint64_t expiry;
-};
-
-typedef std::map<std::string, DB_Entry> database;
-
-struct DB_Config {
-  std::string dir;
-  std::string db_filename;
-  std::string file;
-  database db;
-  database in_memory_db;
-};
+#include "RDB_Decoder.hpp"
 
 class Server {
 private:
@@ -47,9 +27,7 @@ private:
   bool handle_client(int client_fd);
   void set_nonblocking(int sock);
   int parse_request(Request &req, const std::string &buffer);
-  int set_persistence(int argc, char **argv);
-  int read_persistence();
-  int write_persistence();
+  int set_rdb(int argc, char **argv);
   void how_to_use();
 
 public:
