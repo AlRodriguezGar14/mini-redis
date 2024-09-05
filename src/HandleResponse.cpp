@@ -16,6 +16,7 @@ int HandleResponse::check_expire_ms(std::string key, DB_Config &config) {
   uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::system_clock::now().time_since_epoch())
                      .count();
+
   if (config.db[key].expiry > now)
     return 0;
 

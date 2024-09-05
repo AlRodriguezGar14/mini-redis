@@ -1,4 +1,5 @@
 #include "RDB_Decoder.hpp"
+#include <cstdint>
 
 /*
 Length encoding is used to store the length of the next object in the stream.
@@ -220,8 +221,7 @@ int RDB_Decoder::read_rdb() {
     if (opcode == 0xFF) {
       std::cout << "EOF: Reached end of database marker" << std::endl;
       uint64_t checksum;
-      rdb.read(reinterpret_cast<char *>(&checksum), sizeof(checksum));
-      checksum = be64toh(checksum);
+      checksum = read<uint64_t>(rdb);
       std::cout << "db checksum: " << checksum << std::endl;
       break;
     }
@@ -232,16 +232,15 @@ int RDB_Decoder::read_rdb() {
         0xFD) { // expiry time in seconds followed by 4 byte - uint32_t
       uint32_t seconds;
       rdb.read(reinterpret_cast<char *>(&seconds), sizeof(seconds));
-      expire_time_s = be32toh(seconds);
-      rdb.read(reinterpret_cast<char *>(&opcode), 1);
+      expire_time_s = read<uint32_t>(rdb);
+      opcode = read<uint8_t>(rdb);
+      // rdb.read(reinterpret_cast<char *>(&opcode), 1);
       std::cout << "EXPIRETIME: " << expire_time_ms << std::endl;
     }
     if (opcode == 0xFC) { // expiry time in ms, followd by 8 byte
                           // unsigned - uint64_t
-      rdb.read(reinterpret_cast<char *>(&expire_time_ms),
-               sizeof(expire_time_ms));
-      expire_time_ms = be64toh(expire_time_ms);
-      rdb.read(reinterpret_cast<char *>(&opcode), 1);
+      expire_time_ms = read<uint64_t>(rdb);
+      opcode = read<uint8_t>(rdb);
       std::cout << "EXPIRETIMEMS: " << expire_time_ms << std::endl;
     }
 
@@ -254,7 +253,7 @@ int RDB_Decoder::read_rdb() {
                        .count();
     if (expire_time_s == 0 || expire_time_ms > now) {
       std::cout << "adding " << key << " - " << value << std::endl;
-      config.db.insert_or_assign(key, DB_Entry({value, 0, expire_time_s}));
+      config.db.insert_or_assign(key, DB_Entry({value, 0, expire_time_ms}));
     }
   }
 
