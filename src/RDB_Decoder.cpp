@@ -23,7 +23,7 @@ Numbers up to and including 16383 can be stored in 2 bytes
 Numbers up to 2^32 -1 can be stored in 4 bytes
 */
 
-template <typename T = char> T read(std::ifstream &rdb) {
+template <typename T = unsigned char> T read(std::ifstream &rdb) {
   T val;
   rdb.read(reinterpret_cast<char *>(&val), sizeof(val));
   return val;
@@ -165,7 +165,7 @@ int RDB_Decoder::read_rdb() {
   if (!rdb.is_open()) {
     std::cerr << "Could not open the Redis Persistent Database: " << config.file
               << std::endl;
-    return -1;
+    return 0;
   }
 
   char header[9];
@@ -174,8 +174,8 @@ int RDB_Decoder::read_rdb() {
 
   // metadata
   while (true) {
-    char opcode;
-    if (!rdb.read(&opcode, 1)) {
+    unsigned char opcode;
+    if (!rdb.read(reinterpret_cast<char *>(&opcode), 1)) {
       std::cout << "Reached end of file while looking for database start"
                 << std::endl;
       return 0;
@@ -191,8 +191,8 @@ int RDB_Decoder::read_rdb() {
       if (db_number.first.has_value()) {
         std::cout << "SELECTDB: Database number: " << db_number.first.value()
                   << std::endl;
-        opcode =
-            read<char>(rdb); // Read the next opcode after the database number
+        opcode = read<unsigned char>(
+            rdb); // Read the next opcode after the database number
       }
     }
     if (opcode == 0xFB) {
@@ -211,8 +211,8 @@ int RDB_Decoder::read_rdb() {
 
   // Read key-value pairs
   while (true) {
-    char opcode;
-    if (!rdb.read(&opcode, 1)) {
+    unsigned char opcode;
+    if (!rdb.read(reinterpret_cast<char *>(&opcode), 1)) {
       std::cout << "Reached end of file" << std::endl;
       break;
     }
@@ -233,7 +233,7 @@ int RDB_Decoder::read_rdb() {
       uint32_t seconds;
       rdb.read(reinterpret_cast<char *>(&seconds), sizeof(seconds));
       expire_time_s = be32toh(seconds);
-      rdb.read(&opcode, 1);
+      rdb.read(reinterpret_cast<char *>(&opcode), 1);
       std::cout << "EXPIRETIME: " << expire_time_ms << std::endl;
     }
     if (opcode == 0xFC) { // expiry time in ms, followd by 8 byte
@@ -241,7 +241,7 @@ int RDB_Decoder::read_rdb() {
       rdb.read(reinterpret_cast<char *>(&expire_time_ms),
                sizeof(expire_time_ms));
       expire_time_ms = be64toh(expire_time_ms);
-      rdb.read(&opcode, 1);
+      rdb.read(reinterpret_cast<char *>(&opcode), 1);
       std::cout << "EXPIRETIMEMS: " << expire_time_ms << std::endl;
     }
 
