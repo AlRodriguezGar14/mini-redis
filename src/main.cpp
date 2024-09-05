@@ -17,8 +17,7 @@ int main(int argc, char **argv) {
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
 
-  Server server(6379, argc, argv);
-  std::cout << "Server running\n";
+  Server server(argc, argv);
   server.listen_connections();
   server.close_server();
 

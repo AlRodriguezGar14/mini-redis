@@ -22,6 +22,7 @@ struct DB_Config {
   std::string dir;
   std::string db_filename;
   std::string file;
+  int port;
   database db;
   database in_memory_db;
 };

@@ -1,6 +1,8 @@
 #include "RDB_Decoder.hpp"
 #include <cstdint>
 
+#define DEBUG_RDB 0
+
 /*
 Length encoding is used to store the length of the next object in the stream.
 Length encoding is a variable byte encoding designed to use as few bytes as
@@ -171,27 +173,31 @@ int RDB_Decoder::read_rdb() {
 
   char header[9];
   rdb.read(header, 9);
-  std::cout << "Header: " << std::string(header, 9) << std::endl;
+  if (DEBUG_RDB != 0)
+    std::cout << "Header: " << std::string(header, 9) << std::endl;
 
   // metadata
   while (true) {
     unsigned char opcode;
     if (!rdb.read(reinterpret_cast<char *>(&opcode), 1)) {
-      std::cout << "Reached end of file while looking for database start"
-                << std::endl;
+      if (DEBUG_RDB != 0)
+        std::cout << "Reached end of file while looking for database start"
+                  << std::endl;
       return 0;
     }
 
     if (opcode == 0xFA) {
       std::string key = read_byte_to_string(rdb);
       std::string value = read_byte_to_string(rdb);
-      std::cout << "AUX: " << key << " " << value << std::endl;
+      if (DEBUG_RDB != 0)
+        std::cout << "AUX: " << key << " " << value << std::endl;
     }
     if (opcode == 0xFE) {
       auto db_number = get_str_bytes_len(rdb);
       if (db_number.first.has_value()) {
-        std::cout << "SELECTDB: Database number: " << db_number.first.value()
-                  << std::endl;
+        if (DEBUG_RDB != 0)
+          std::cout << "SELECTDB: Database number: " << db_number.first.value()
+                    << std::endl;
         opcode = read<unsigned char>(
             rdb); // Read the next opcode after the database number
       }
@@ -201,10 +207,11 @@ int RDB_Decoder::read_rdb() {
       auto expire_hash_table_size = get_str_bytes_len(rdb);
       if (hash_table_size.first.has_value() &&
           expire_hash_table_size.first.has_value()) {
-        std::cout << "RESIZEDB: Hash table size: "
-                  << hash_table_size.first.value()
-                  << ", Expire hash table size: "
-                  << expire_hash_table_size.first.value() << std::endl;
+        if (DEBUG_RDB != 0)
+          std::cout << "RESIZEDB: Hash table size: "
+                    << hash_table_size.first.value()
+                    << ", Expire hash table size: "
+                    << expire_hash_table_size.first.value() << std::endl;
       }
       break;
     }
@@ -214,15 +221,18 @@ int RDB_Decoder::read_rdb() {
   while (true) {
     unsigned char opcode;
     if (!rdb.read(reinterpret_cast<char *>(&opcode), 1)) {
-      std::cout << "Reached end of file" << std::endl;
+      if (DEBUG_RDB != 0)
+        std::cout << "Reached end of file" << std::endl;
       break;
     }
 
     if (opcode == 0xFF) {
-      std::cout << "EOF: Reached end of database marker" << std::endl;
+      if (DEBUG_RDB != 0)
+        std::cout << "EOF: Reached end of database marker" << std::endl;
       uint64_t checksum;
       checksum = read<uint64_t>(rdb);
-      std::cout << "db checksum: " << checksum << std::endl;
+      if (DEBUG_RDB != 0)
+        std::cout << "db checksum: " << checksum << std::endl;
       break;
     }
 
@@ -235,13 +245,15 @@ int RDB_Decoder::read_rdb() {
       expire_time_s = read<uint32_t>(rdb);
       opcode = read<uint8_t>(rdb);
       // rdb.read(reinterpret_cast<char *>(&opcode), 1);
-      std::cout << "EXPIRETIME: " << expire_time_ms << std::endl;
+      if (DEBUG_RDB != 0)
+        std::cout << "EXPIRETIME: " << expire_time_ms << std::endl;
     }
     if (opcode == 0xFC) { // expiry time in ms, followd by 8 byte
                           // unsigned - uint64_t
       expire_time_ms = read<uint64_t>(rdb);
       opcode = read<uint8_t>(rdb);
-      std::cout << "EXPIRETIMEMS: " << expire_time_ms << std::endl;
+      if (DEBUG_RDB != 0)
+        std::cout << "EXPIRETIMEMS: " << expire_time_ms << std::endl;
     }
 
     // After 0xFD and 0x FC, comes the key-pair-value
@@ -252,7 +264,8 @@ int RDB_Decoder::read_rdb() {
                        std::chrono::system_clock::now().time_since_epoch())
                        .count();
     if (expire_time_s == 0 || expire_time_ms > now) {
-      std::cout << "adding " << key << " - " << value << std::endl;
+      if (DEBUG_RDB != 0)
+        std::cout << "adding " << key << " - " << value << std::endl;
       config.db.insert_or_assign(key, DB_Entry({value, 0, expire_time_ms}));
     }
   }

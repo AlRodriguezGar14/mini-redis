@@ -21,17 +21,16 @@ class Server {
 private:
   int m_server_fd;
   int m_connection_backlog;
-  int m_port;
   DB_Config config;
 
   bool handle_client(int client_fd);
   void set_nonblocking(int sock);
   int parse_request(Request &req, const std::string &buffer);
-  int set_rdb(int argc, char **argv);
+  int set_db(int argc, char **argv);
   void how_to_use();
 
 public:
-  Server(int port, int argc = 0, char **argv = NULL);
+  Server(int argc = 0, char **argv = NULL);
   int init_server();
   void listen_connections();
 

@@ -14,49 +14,55 @@
 #include <unistd.h>
 
 #define MAX_EVENTS 100
+#define DEBUG_SERVER 0
 
-Server::Server(int port, int argc, char **argv)
-    : m_connection_backlog(5), m_port(port) {
-  if (set_rdb(argc, argv) == -1)
+Server::Server(int argc, char **argv) : m_connection_backlog(5) {
+  if (set_db(argc, argv) == -1)
     exit(1);
   if (init_server() < 0)
     exit(1);
+  std::cout << "\nServer listening to port " << config.port << std::endl;
 }
 
 void Server::how_to_use() {
-  std::cout << "\n\tIncorrect input. How to use:\n\t"
-            << "./your_program.sh --dir /tmp/redis-files --dbfilename dump.rdb"
-            << std::endl;
+  std::cout << "\nAccepted arguments:\n\t"
+            << "--help\n\t"
+            << "--dir /dir/path\n\t"
+            << "--dbfilename file_name.rdb\n\t"
+            << "--port replica_port_number" << std::endl;
 }
 
-int Server::set_rdb(int argc, char **argv) {
-  if (argc != 5 && argc != 1)
-    return how_to_use(), -1;
+int Server::set_db(int argc, char **argv) {
 
-  if (argc == 1) {
-    std::cout << "Setting default values\n";
-    config.dir = ".";
-    config.db_filename = "default.rdb";
+  config.dir = ".";
+  config.db_filename = "dump.rdb";
+  config.port = 6379;
 
-    RDB_Decoder decoder(config);
-    if (decoder.read_rdb() == -1)
+  for (int i = 0; i < argc; ++i) {
+    if (strncmp(argv[i], "--dir", strlen(argv[i])) == 0 && (i + 1) < argc)
+      config.dir = std::string(argv[i + 1]);
+    if (strncmp(argv[i], "--dbfilename", strlen(argv[i])) == 0 &&
+        (i + 1) < argc) {
+      config.db_filename = std::string(argv[i + 1]);
+      if (config.db_filename.substr(config.db_filename.length() - 4) !=
+          ".rdb") {
+        std::cout << "invalid filename: " << config.db_filename << std::endl;
+        return -1;
+      }
+    }
+    if (strncmp(argv[i], "--port", strlen(argv[i])) == 0 && (i + 1) < argc)
+      config.port = std::stoi(argv[i + 1]);
+    if (strncmp(argv[i], "--help", strlen(argv[i])) == 0) {
+      how_to_use();
       return -1;
-    return 0;
+    }
   }
 
-  if (strncmp(argv[1], "--dir", strlen(argv[1])) == 0)
-    config.dir = std::string(argv[2]);
-  else {
-    return how_to_use(), -1;
-  }
-  if (strncmp(argv[3], "--dbfilename", strlen(argv[3])) == 0)
-    config.db_filename = std::string(argv[4]);
-  else {
-    return how_to_use(), -1;
-  }
-  if (config.db_filename.substr(config.db_filename.length() - 4) != ".rdb")
-    return how_to_use(), -1;
-
+  if (DEBUG_SERVER != 0)
+    std::cout << "DB config: \n\t"
+              << "dir: " << config.dir << "\n\t"
+              << "filename: " << config.db_filename << "\n\t"
+              << "port: " << config.port << "\n\t" << std::endl;
   RDB_Decoder decoder(config);
   if (decoder.read_rdb() == -1)
     return -1;
@@ -85,7 +91,7 @@ int Server::init_server() {
   }
   struct sockaddr_in server_addr;
   server_addr.sin_family = AF_INET;
-  server_addr.sin_port = htons(m_port);
+  server_addr.sin_port = htons(config.port);
   server_addr.sin_addr.s_addr = INADDR_ANY;
 
   int reuse = 1;
